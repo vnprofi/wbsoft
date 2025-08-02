@@ -61,7 +61,20 @@ async def _get_json(session: aiohttp.ClientSession, url: str):
         async with session.get(url, headers=HEADERS) as r:
             if r.status != 200:
                 return None
-            return await r.json(loads=json.loads, content_type=None)
+            
+            # Читаем текст ответа
+            text = await r.text()
+            
+            if not text.strip():
+                return None
+                
+            # Парсим JSON
+            try:
+                data = json.loads(text)
+                return data
+            except json.JSONDecodeError:
+                return None
+            
     except Exception:
         return None
 
@@ -85,11 +98,17 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
     data = None
     for vol in dict.fromkeys(possible_vols):  # preserve order, remove dups
         url = f"https://static-basket-01.wbbasket.ru/vol{vol}/data/supplier-by-id/{sid}.json"
-        data = await _get_json(session, url)
-        if data and data.get("supplierName"):
-            break
+        try:
+            data = await _get_json(session, url)
+            # ВАЖНО: не проверяем supplierName, так как он может быть пустым
+            # но другие данные (inn, kpp, ogrn) могут присутствовать
+            if data and isinstance(data, dict):
+                break
+        except Exception as e:
+            print(f"ERROR: Exception fetching passport for seller {sid} from vol{vol}: {e}")
+            continue
 
-    if not data or not data.get("supplierName"):
+    if not data or not isinstance(data, dict):
         return None
 
     # extract address-related fields if present
