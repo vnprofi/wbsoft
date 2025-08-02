@@ -68,19 +68,39 @@ async def _get_json(session: aiohttp.ClientSession, url: str):
 # -------------------------------------------------------------
 # Data fetchers ------------------------------------------------
 async def fetch_passport(session: aiohttp.ClientSession, sid: int):
-    vol = 0 if sid < 1_000_000 else sid // 1000
-    url = f"https://static-basket-01.wbbasket.ru/vol{vol}/data/supplier-by-id/{sid}.json"
-    data = await _get_json(session, url)
+    """Возвращает базовую информацию о продавце.
+
+    У Wildberries встречаются разные схемы хранения supplier-by-id. Чаще всего это
+    vol0, но для части продавцов встречаются vol, вычисляемые как sid // 1000
+    (историческая схема) или другие варианты. Чтобы гарантированно получить
+    данные, пробуем несколько вариантов, останавливаясь на первом успешном.
+    """
+
+    possible_vols = [0]
+    # Схема «/vol{id//1000}/» встречается в старых примерах
+    possible_vols.append(sid // 1000)
+    # На всякий случай пытаемся и //10000 – замечено у части новых ID
+    possible_vols.append(sid // 10000)
+
+    data = None
+    for vol in dict.fromkeys(possible_vols):  # preserve order, remove dups
+        url = f"https://static-basket-01.wbbasket.ru/vol{vol}/data/supplier-by-id/{sid}.json"
+        data = await _get_json(session, url)
+        if data and data.get("supplierName"):
+            break
+
     if not data or not data.get("supplierName"):
         return None
-    # extract address fields if exist
+
+    # extract address-related fields if present
     address_block = data.get("legalAddress", {}) if isinstance(data.get("legalAddress"), dict) else {}
+
     return {
         "supplierName": data.get("supplierName"),
         "supplierFullName": data.get("supplierFullName"),
         "inn": data.get("inn"),
         "kpp": data.get("kpp"),
-        "ogrn": data.get("ogrn"),
+        "ogrn": data.get("ogrn") or data.get("ogrnip") or data.get("ogrnIp"),
         "address": address_block.get("address") or data.get("address"),
         "region": address_block.get("region"),
         "city": address_block.get("city"),
@@ -170,7 +190,7 @@ async def export_data(
     seller_ids: List[int],
     output_path: str,
     progress_cb: Optional[Callable[[int, int], None]] = None,
-    concurrency: int = 5,
+    concurrency: int = 10,
 ):
     """Fetch data for given seller ids and save to CSV or Excel based on output_path extension."""
     import pandas as pd
