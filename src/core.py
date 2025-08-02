@@ -102,13 +102,13 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
             print(f"DEBUG: Trying {url}")
             data = await _get_json(session, url)
             if data:
-                print(f"DEBUG: Got data for {sid}: supplierId={data.get('supplierId')}, expected={sid}")
+                print(f"DEBUG: Got data for {sid}: supplierId={data.get('supplierId')}, supplierName={data.get('supplierName')}")
                 print(f"DEBUG: Data keys: {list(data.keys())}")
             else:
                 print(f"DEBUG: No data from {url}")
                 
-            # Проверяем что получили валидные данные - хотя бы supplierId должен совпадать
-            if data and isinstance(data, dict) and data.get("supplierId") == sid:
+            # Проверяем что получили валидные данные - как в рабочем локальном коде
+            if data and data.get("supplierName"):
                 print(f"DEBUG: SUCCESS - Found valid data for {sid}")
                 break
         except Exception as e:
@@ -116,7 +116,7 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
             continue
 
     # Если не получили валидные данные, возвращаем None
-    if not data or not isinstance(data, dict) or data.get("supplierId") != sid:
+    if not data or not data.get("supplierName"):
         print(f"DEBUG: FAILED to get valid data for {sid}")
         return None
 
