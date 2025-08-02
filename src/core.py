@@ -188,19 +188,25 @@ async def export_data(
             try:
                 sid = await q.get()
                 try:
-                    passport = await fetch_passport(session, sid)
-                    if not passport:
-                        continue  # skip seller without passport info
+                    passport_raw = await fetch_passport(session, sid)
+                    sample_raw = await fetch_goods_sample(session, sid)
 
-                    sample = await fetch_goods_sample(session, sid)
-                    if not sample:
-                        continue  # skip if sample failed
+                    # Use empty dicts if any of the fetches failed so that we still output the row
+                    passport = passport_raw or {}
+                    sample = sample_raw or {}
 
-                    disc_items = sample.get("topDiscountItems") or []
-                    # Flatten first 3 discount items (id, disc, promo)
-                    flat_disc = []
-                    for d in disc_items[:3]:
-                        flat_disc.extend(d)
+                    # Helper to ensure lists always have exactly 3 elements
+                    def pad(lst, size=3, fill=None):
+                        return (list(lst) + [fill] * size)[:size]
+
+                    # Top subjects / brands always length 3
+                    top_subjects = pad(sample.get("topSubjects", []))
+                    top_brands = pad(sample.get("topBrands", []))
+
+                    # Discounts list – each item is (id, disc, promo). Ensure exactly 3 tuples
+                    disc_items = sample.get("topDiscountItems", [])
+                    disc_items = disc_items + [(None, None, None)] * (3 - len(disc_items))
+                    flat_disc = [item for triple in disc_items[:3] for item in triple]
 
                     row = [
                         sid,
@@ -215,8 +221,8 @@ async def export_data(
                         passport.get("zip"),
                         passport.get("country"),
                         sample.get("subjectsCount"),
-                        *sample.get("topSubjects")[:3],
-                        *sample.get("topBrands")[:3],
+                        *top_subjects,
+                        *top_brands,
                         sample.get("priceMin"),
                         sample.get("priceAvg"),
                         sample.get("priceMax"),
