@@ -21,7 +21,12 @@ from typing import List
 from qasync import QEventLoop, asyncSlot
 import asyncio
 
-from .core import export_data  # relative import inside package
+try:
+    # when packaged as a standalone executable core will be importable as top-level module
+    from core import export_data
+except ImportError:
+    # fallback to relative import when running from source tree
+    from .core import export_data
 
 
 class MainWindow(QWidget):
