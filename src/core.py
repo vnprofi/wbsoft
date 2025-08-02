@@ -10,7 +10,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; wb-seller-crawler/1.0)",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
 }
 
@@ -19,6 +19,7 @@ COLUMNS = [
     "ID",
     "Продавец",
     "Полное название",
+    "Торговая марка",
     "ИНН",
     "КПП",
     "ОГРН",
@@ -118,6 +119,7 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
     result = {
         "supplierName": data.get("supplierName"),
         "supplierFullName": data.get("supplierFullName"),
+        "trademark": data.get("trademark"),
         "inn": data.get("inn"),
         "kpp": data.get("kpp"),
         "ogrn": data.get("ogrn") or data.get("ogrnip") or data.get("ogrnIp"),
@@ -254,6 +256,7 @@ async def export_data(
                         sid,
                         passport.get("supplierName"),
                         passport.get("supplierFullName"),
+                        passport.get("trademark"),
                         passport.get("inn"),
                         passport.get("kpp"),
                         passport.get("ogrn"),
