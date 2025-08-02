@@ -61,7 +61,20 @@ async def _get_json(session: aiohttp.ClientSession, url: str):
         async with session.get(url, headers=HEADERS) as r:
             if r.status != 200:
                 return None
-            return await r.json(loads=json.loads, content_type=None)
+            
+            # Читаем текст ответа
+            text = await r.text()
+            
+            if not text.strip():
+                return None
+                
+            # Парсим JSON
+            try:
+                data = json.loads(text)
+                return data
+            except json.JSONDecodeError:
+                return None
+            
     except Exception:
         return None
 
@@ -70,23 +83,38 @@ async def _get_json(session: aiohttp.ClientSession, url: str):
 async def fetch_passport(session: aiohttp.ClientSession, sid: int):
     vol = 0 if sid < 1_000_000 else sid // 1000
     url = f"https://static-basket-01.wbbasket.ru/vol{vol}/data/supplier-by-id/{sid}.json"
-    data = await _get_json(session, url)
-    if not data or not data.get("supplierName"):
+    
+    try:
+        data = await _get_json(session, url)
+        
+        # Проверяем валидность данных
+        if not data or not isinstance(data, dict):
+            return None
+            
+        # Проверяем наличие основных полей - поле supplierName может быть пустым, это норма
+        supplier_name = data.get("supplierName", "")
+        
+        # extract address fields if exist
+        address_block = data.get("legalAddress", {}) if isinstance(data.get("legalAddress"), dict) else {}
+        
+        result = {
+            "supplierName": data.get("supplierName"),
+            "supplierFullName": data.get("supplierFullName"),
+            "inn": data.get("inn"),
+            "kpp": data.get("kpp"),
+            "ogrn": data.get("ogrn"),
+            "address": address_block.get("address") or data.get("address"),
+            "region": address_block.get("region"),
+            "city": address_block.get("city"),
+            "zip": address_block.get("zip") or address_block.get("postCode"),
+            "country": address_block.get("country"),
+        }
+        
+        return result
+        
+    except Exception as e:
+        print(f"ERROR: Exception in fetch_passport for seller {sid}: {e}")
         return None
-    # extract address fields if exist
-    address_block = data.get("legalAddress", {}) if isinstance(data.get("legalAddress"), dict) else {}
-    return {
-        "supplierName": data.get("supplierName"),
-        "supplierFullName": data.get("supplierFullName"),
-        "inn": data.get("inn"),
-        "kpp": data.get("kpp"),
-        "ogrn": data.get("ogrn"),
-        "address": address_block.get("address") or data.get("address"),
-        "region": address_block.get("region"),
-        "city": address_block.get("city"),
-        "zip": address_block.get("zip") or address_block.get("postCode"),
-        "country": address_block.get("country"),
-    }
 
 async def fetch_cards_info(session: aiohttp.ClientSession, sid: int):
     vol = sid // 1000
