@@ -1,0 +1,7 @@
+aiohttp==3.9.1
+asyncio
+csv
+json
+time
+datetime
+statistics 
