@@ -7,7 +7,7 @@ import time
 # ----------- Параметры --------------------------------------
 INPUT_PATH = r"C:\Users\User\Desktop\wb\active_seller.txt"
 OUTPUT_PATH = r"C:\Users\User\Desktop\wb\active_seller_full.csv"
-MAX_SELLERS = 60
+MAX_SELLERS = 300
 CONCURRENCY = 5
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
 HEADERS = {
@@ -62,6 +62,22 @@ async def fetch_cards_info(session, sid: int):
     js = await get_json(session, url)
     if js:
         return {"cardsCount": js.get("cardsCount"), "brandsCount": js.get("brandsCount")}
+    return None
+
+# ----------- geographic data --------------------------------
+async def fetch_geographic_data(session, sid: int):
+    """Получение географических данных продавца"""
+    vol = 0 if sid < 1_000_000 else sid // 1000
+    url = f"https://static-basket-01.wbbasket.ru/vol{vol}/data/supplier-by-id/{sid}.json"
+    data = await get_json(session, url)
+    if data:
+        return {
+            "address": data.get("address"),
+            "region": data.get("region"),
+            "city": data.get("city"),
+            "postalCode": data.get("postalCode"),
+            "country": data.get("country"),
+        }
     return None
 
 # ----------- goods sample (categories, brands, price stats & promos) --
@@ -212,6 +228,7 @@ async def worker(q: asyncio.Queue, session: aiohttp.ClientSession, writer: csv.w
                     q.task_done(); continue
                 rating = await fetch_rating(session, sid)
                 cards = await fetch_cards_info(session, sid)
+                geographic = await fetch_geographic_data(session, sid)
                 sample = await fetch_goods_sample(session, sid)
                 top_sales = await fetch_top_sales(session, sid)
 
@@ -239,6 +256,11 @@ async def worker(q: asyncio.Queue, session: aiohttp.ClientSession, writer: csv.w
                     passport.get("registrationDate"),
                     passport.get("legalType"),
                     passport.get("siteUrl"),
+                    geographic.get("address") if geographic else None,
+                    geographic.get("region") if geographic else None,
+                    geographic.get("city") if geographic else None,
+                    geographic.get("postalCode") if geographic else None,
+                    geographic.get("country") if geographic else None,
                     rating.get("rating") if rating else None,
                     rating.get("feedbacks") if rating else None,
                     cards.get("cardsCount") if cards else None,
@@ -286,7 +308,7 @@ async def main():
             writer = csv.writer(csvfile, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL)
             writer.writerow([
                 "ID", "Продавец", "Полное название", "ИНН", "КПП", "ОГРН",
-                "Дата рег.", "Тип юр.лица", "Сайт",
+                "Дата рег.", "Тип юр.лица", "Сайт", "Адрес", "Регион", "Город", "Индекс", "Страна",
                 "Рейтинг WB", "Отзывы WB",
                 "Карточек", "Брендов",
                 "Категорий", "Топ категория 1", "Топ категория 2", "Топ категория 3",
