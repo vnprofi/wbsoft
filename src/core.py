@@ -99,22 +99,31 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
     for vol in dict.fromkeys(possible_vols):  # preserve order, remove dups
         url = f"https://static-basket-01.wbbasket.ru/vol{vol}/data/supplier-by-id/{sid}.json"
         try:
+            print(f"DEBUG: Trying {url}")
             data = await _get_json(session, url)
-            # ВАЖНО: не проверяем supplierName, так как он может быть пустым
-            # но другие данные (inn, kpp, ogrn) могут присутствовать
-            if data and isinstance(data, dict):
+            if data:
+                print(f"DEBUG: Got data for {sid}: supplierId={data.get('supplierId')}, expected={sid}")
+                print(f"DEBUG: Data keys: {list(data.keys())}")
+            else:
+                print(f"DEBUG: No data from {url}")
+                
+            # Проверяем что получили валидные данные - хотя бы supplierId должен совпадать
+            if data and isinstance(data, dict) and data.get("supplierId") == sid:
+                print(f"DEBUG: SUCCESS - Found valid data for {sid}")
                 break
         except Exception as e:
             print(f"ERROR: Exception fetching passport for seller {sid} from vol{vol}: {e}")
             continue
 
-    if not data or not isinstance(data, dict):
+    # Если не получили валидные данные, возвращаем None
+    if not data or not isinstance(data, dict) or data.get("supplierId") != sid:
+        print(f"DEBUG: FAILED to get valid data for {sid}")
         return None
 
     # extract address-related fields if present
     address_block = data.get("legalAddress", {}) if isinstance(data.get("legalAddress"), dict) else {}
 
-    return {
+    result = {
         "supplierName": data.get("supplierName"),
         "supplierFullName": data.get("supplierFullName"),
         "inn": data.get("inn"),
@@ -126,6 +135,9 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
         "zip": address_block.get("zip") or address_block.get("postCode"),
         "country": address_block.get("country"),
     }
+    
+    print(f"DEBUG: Returning for {sid}: {result}")
+    return result
 
 async def fetch_cards_info(session: aiohttp.ClientSession, sid: int):
     vol = sid // 1000
@@ -227,12 +239,18 @@ async def export_data(
             try:
                 sid = await q.get()
                 try:
+                    print(f"DEBUG: Processing seller {sid}")
                     passport_raw = await fetch_passport(session, sid)
                     sample_raw = await fetch_goods_sample(session, sid)
 
                     # Use empty dicts if any of the fetches failed so that we still output the row
                     passport = passport_raw or {}
                     sample = sample_raw or {}
+                    
+                    if passport_raw:
+                        print(f"DEBUG: Got passport data for {sid}")
+                    else:
+                        print(f"WARNING: No passport data for {sid}")
 
                     # Helper to ensure lists always have exactly 3 elements
                     def pad(lst, size=3, fill=None):
@@ -273,6 +291,8 @@ async def export_data(
                         sample.get("promoTypes"),
                         *flat_disc,
                     ]
+                    
+                    print(f"DEBUG: Row for {sid}: ID={row[0]}, Name='{row[1]}', FullName='{row[2]}', INN='{row[3]}'")
 
                     async with lock:
                         rows.append(row)
