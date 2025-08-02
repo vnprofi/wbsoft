@@ -34,10 +34,7 @@ jobs:
 
       - name: Verify deps
         run: |
-          python - << 'PY'
-          import PyQt6, qasync, pandas, aiohttp, sys
-          print('Deps OK. PyQt', PyQt6.QtCore.QT_VERSION_STR)
-          PY
+          python -c "import PyQt6, qasync, pandas, aiohttp, openpyxl, sys, platform; print('Deps OK on', platform.system(), 'PyQt', PyQt6.QtCore.QT_VERSION_STR)"
 
       - name: Build application with PyInstaller
         run: |
@@ -48,6 +45,8 @@ jobs:
             --specpath . \
             --hidden-import PyQt6 \
             --hidden-import qasync \
+            --hidden-import pandas \
+            --hidden-import openpyxl \
             src/gui.py
         shell: bash
 
