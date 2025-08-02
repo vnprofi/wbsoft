@@ -1,7 +1,3 @@
-aiohttp==3.9.1
-asyncio
-csv
-json
-time
-datetime
-statistics 
+aiohttp>=3.9.1
+PyQt6>=6.6.1
+qasync>=0.26.0 
