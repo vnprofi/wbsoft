@@ -144,10 +144,14 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
         return sorted(d.items(), key=lambda x: -x[1])[:n]
     top_cats = top_n(cats)
     top_brands = top_n(brands)
+    # Ensure exactly 3 discount tuples (nmId, disc%, promoText)
+    disc_items_sorted = sorted(discount_items, key=lambda x: -x[1])[:3]
+    disc_items_padded = disc_items_sorted + [(None, None, None)] * (3 - len(disc_items_sorted))
+
     return {
         "subjectsCount": len(cats),
-        "topSubjects": [c[0] for c in top_cats] + [None, None, None],
-        "topBrands": [b[0] for b in top_brands] + [None, None, None],
+        "topSubjects": [c[0] for c in top_cats] + [None] * (3 - len(top_cats)),
+        "topBrands": [b[0] for b in top_brands] + [None] * (3 - len(top_brands)),
         "priceMin": min(prices) if prices else None,
         "priceAvg": round(sum(prices) / len(prices), 2) if prices else None,
         "priceMax": max(prices) if prices else None,
@@ -157,7 +161,7 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
         "discountMax": max(disc_list) if disc_list else None,
         "promoCount": len(promo_types_set),
         "promoTypes": "|".join(promo_types_set) if promo_types_set else None,
-        "topDiscountItems": sorted(discount_items, key=lambda x: -x[1])[:3] + [(None, None, None)] * 3,
+        "topDiscountItems": disc_items_padded,
     }
 
 # -------------------------------------------------------------
@@ -186,15 +190,18 @@ async def export_data(
                 try:
                     passport = await fetch_passport(session, sid)
                     if not passport:
-                        q.task_done()
-                        continue
+                        continue  # skip seller without passport info
+
                     sample = await fetch_goods_sample(session, sid)
+                    if not sample:
+                        continue  # skip if sample failed
 
                     disc_items = sample.get("topDiscountItems") or []
                     # Flatten first 3 discount items (id, disc, promo)
                     flat_disc = []
                     for d in disc_items[:3]:
                         flat_disc.extend(d)
+
                     row = [
                         sid,
                         passport.get("supplierName"),
@@ -221,8 +228,12 @@ async def export_data(
                         sample.get("promoTypes"),
                         *flat_disc,
                     ]
+
                     async with lock:
                         rows.append(row)
+                except Exception as exc:
+                    # log and continue processing other IDs
+                    print(f"Error processing {sid}: {exc}")
                 finally:
                     if progress_cb:
                         progress_cb(len(rows), len(seller_ids))
