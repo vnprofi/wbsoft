@@ -115,7 +115,9 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
         return None
 
     # extract address-related fields if present
-    address_block = data.get("legalAddress", {}) if isinstance(data.get("legalAddress"), dict) else {}
+    legal = data.get("legalAddress")
+    address_block = legal if isinstance(legal, dict) else {}
+    address_value = (address_block.get("address") if isinstance(legal, dict) else legal) or data.get("address")
 
     result = {
         "supplierName": data.get("supplierName"),
@@ -124,7 +126,7 @@ async def fetch_passport(session: aiohttp.ClientSession, sid: int):
         "inn": data.get("inn"),
         "kpp": data.get("kpp"),
         "ogrn": data.get("ogrn") or data.get("ogrnip") or data.get("ogrnIp"),
-        "address": address_block.get("address") or data.get("address"),
+        "address": address_value,
         "region": address_block.get("region"),
         "city": address_block.get("city"),
         "zip": address_block.get("zip") or address_block.get("postCode"),
