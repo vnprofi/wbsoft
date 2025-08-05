@@ -193,6 +193,14 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
             brands[brand_name] = brands.get(brand_name, 0) + 1
             # prices
             price_block = g.get("price") if isinstance(g.get("price"), dict) else {}
+            # Fallback: WB часто кладёт price только внутри sizes[0].price
+            if not price_block:
+                sizes_list = g.get("sizes")
+                if isinstance(sizes_list, list) and sizes_list:
+                    first_price = sizes_list[0].get("price") if isinstance(sizes_list[0], dict) else None
+                    if isinstance(first_price, dict):
+                        price_block = first_price
+
             basic_raw = price_block.get("basic") or g.get("priceU")
             product_raw = price_block.get("product") or g.get("salePriceU")
             total_raw = price_block.get("total")
@@ -205,8 +213,7 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
             logistics = logistics_raw / 100 if logistics_raw else None
 
             # legacy for priceMin/Max (promo or basic)
-            promo_raw = product_raw
-            promo_price = promo_raw / 100 if promo_raw else basic
+            promo_price = product if product is not None else basic
             if promo_price is not None:
                 prices.append(promo_price)
 
