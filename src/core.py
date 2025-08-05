@@ -42,12 +42,15 @@ COLUMNS = [
     "Кол-во акций",
     "Типы акций",
     "СкидТовар1",
+    "СсылкаТовар1",
     "Скид%1",
     "Акция1",
     "СкидТовар2",
+    "СсылкаТовар2",
     "Скид%2",
     "Акция2",
     "СкидТовар3",
+    "СсылкаТовар3",
     "Скид%3",
     "Акция3",
 ]
@@ -249,7 +252,12 @@ async def export_data(
                     # Discounts list – each item is (id, disc, promo). Ensure exactly 3 tuples
                     disc_items = sample.get("topDiscountItems", [])
                     disc_items = disc_items + [(None, None, None)] * (3 - len(disc_items))
-                    flat_disc = [item for triple in disc_items[:3] for item in triple]
+
+                    # Build flattened list: id, link, discount %, promo for each of 3 items
+                    flat_disc: List = []
+                    for gid, disc, promo in disc_items[:3]:
+                        link = f"https://www.wildberries.ru/catalog/{gid}/detail.aspx" if gid else None
+                        flat_disc.extend([gid, link, disc, promo])
 
                     row = [
                         sid,
