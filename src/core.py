@@ -35,6 +35,16 @@ COLUMNS = [
     "Цена мин",
     "Цена средн",
     "Цена макс",
+    "Цена basic мин",
+    "Цена basic средн",
+    "Цена basic макс",
+    "Цена product мин",
+    "Цена product средн",
+    "Цена product макс",
+    "Цена total мин",
+    "Цена total средн",
+    "Цена total макс",
+    "Цена logistics средн",
     "Ср. рейтинг товаров",
     "Сумма отзывов товаров",
     "Ср. скидка %",
@@ -45,14 +55,29 @@ COLUMNS = [
     "СсылкаТовар1",
     "Скид%1",
     "Акция1",
+    "Цена basic 1",
+    "Цена product 1",
+    "Цена total 1",
+    "Цена logistics 1",
+    "Рейтинг1",
     "СкидТовар2",
     "СсылкаТовар2",
     "Скид%2",
     "Акция2",
+    "Цена basic 2",
+    "Цена product 2",
+    "Цена total 2",
+    "Цена logistics 2",
+    "Рейтинг2",
     "СкидТовар3",
     "СсылкаТовар3",
     "Скид%3",
     "Акция3",
+    "Цена basic 3",
+    "Цена product 3",
+    "Цена total 3",
+    "Цена logistics 3",
+    "Рейтинг3",
 ]
 
 # -------------------------------------------------------------
@@ -150,6 +175,7 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
     promo_types_set = set()
     discount_items = []  # (id, disc, promo)
     goods_seen = 0
+    basic_prices, product_prices, total_prices, logistics_prices = [], [], [], []
     for page in range(1, pages + 1):
         url = (
             "https://catalog.wb.ru/sellers/v2/catalog?ab_testing=false&appType=1&curr=rub&dest=-1184644"
@@ -167,19 +193,53 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
             brands[brand_name] = brands.get(brand_name, 0) + 1
             # prices
             price_block = g.get("price") if isinstance(g.get("price"), dict) else {}
-            basic = price_block.get("basic") or g.get("priceU")
-            promo = price_block.get("product") or g.get("salePriceU")
-            if (promo or basic):
-                prices.append((promo or basic) / 100)
+            basic_raw = price_block.get("basic") or g.get("priceU")
+            product_raw = price_block.get("product") or g.get("salePriceU")
+            total_raw = price_block.get("total")
+            logistics_raw = price_block.get("logistics")
+
+            # Convert to ₽
+            basic = basic_raw / 100 if basic_raw else None
+            product = product_raw / 100 if product_raw else None
+            total = total_raw / 100 if total_raw else None
+            logistics = logistics_raw / 100 if logistics_raw else None
+
+            # legacy for priceMin/Max (promo or basic)
+            promo_raw = product_raw
+            promo_price = promo_raw / 100 if promo_raw else basic
+            if promo_price is not None:
+                prices.append(promo_price)
+
+            # accumulate per-component lists
+            if basic is not None:
+                basic_prices.append(basic)
+            if product is not None:
+                product_prices.append(product)
+            if total is not None:
+                total_prices.append(total)
+            if logistics is not None:
+                logistics_prices.append(logistics)
+
             # discount
             disc = 0
-            if basic and promo and basic > 0:
-                disc = round((basic - promo) / basic * 100, 1)
+            if basic is not None and product is not None and basic > 0:
+                disc = round((basic - product) / basic * 100, 1)
             disc_list.append(disc)
             # promos
             if g.get("promoTextCard"):
                 promo_types_set.add(g.get("promoTextCard"))
-            discount_items.append((g.get("id"), disc, g.get("promoTextCard")))
+            discount_items.append(
+                (
+                    g.get("id"),
+                    disc,
+                    g.get("promoTextCard"),
+                    basic,
+                    product,
+                    total,
+                    logistics,
+                    g.get("rating"),
+                )
+            )
             # ratings
             if g.get("rating"):
                 ratings.append(g.get("rating"))
@@ -192,7 +252,7 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
     top_brands = top_n(brands)
     # Ensure exactly 3 discount tuples (nmId, disc%, promoText)
     disc_items_sorted = sorted(discount_items, key=lambda x: -x[1])[:3]
-    disc_items_padded = disc_items_sorted + [(None, None, None)] * (3 - len(disc_items_sorted))
+    disc_items_padded = disc_items_sorted + [(None,) * 8] * (3 - len(disc_items_sorted))
 
     return {
         "subjectsCount": len(cats),
@@ -201,6 +261,20 @@ async def fetch_goods_sample(session: aiohttp.ClientSession, sid: int, pages: in
         "priceMin": min(prices) if prices else None,
         "priceAvg": round(sum(prices) / len(prices), 2) if prices else None,
         "priceMax": max(prices) if prices else None,
+        # per-component aggregates
+        "basicMin": min(basic_prices) if basic_prices else None,
+        "basicAvg": round(sum(basic_prices) / len(basic_prices), 2) if basic_prices else None,
+        "basicMax": max(basic_prices) if basic_prices else None,
+
+        "productMin": min(product_prices) if product_prices else None,
+        "productAvg": round(sum(product_prices) / len(product_prices), 2) if product_prices else None,
+        "productMax": max(product_prices) if product_prices else None,
+
+        "totalMin": min(total_prices) if total_prices else None,
+        "totalAvg": round(sum(total_prices) / len(total_prices), 2) if total_prices else None,
+        "totalMax": max(total_prices) if total_prices else None,
+
+        "logisticsAvg": round(sum(logistics_prices) / len(logistics_prices), 2) if logistics_prices else None,
         "ratingAvgProd": round(sum(ratings) / len(ratings), 2) if ratings else None,
         "feedbacksSum": sum(feedbacks) if feedbacks else None,
         "discountAvg": round(sum(disc_list) / len(disc_list), 1) if disc_list else None,
@@ -249,15 +323,25 @@ async def export_data(
                     top_subjects = pad(sample.get("topSubjects", []))
                     top_brands = pad(sample.get("topBrands", []))
 
-                    # Discounts list – each item is (id, disc, promo). Ensure exactly 3 tuples
+                    # Discounts list – each item is 8-tuple (id, disc, promo, basic, product, total, logistics, rating)
                     disc_items = sample.get("topDiscountItems", [])
-                    disc_items = disc_items + [(None, None, None)] * (3 - len(disc_items))
+                    disc_items = disc_items + [(None,) * 8] * (3 - len(disc_items))
 
-                    # Build flattened list: id, link, discount %, promo for each of 3 items
+                    # Build flattened list for each of 3 items: id, link, disc, promo, basic, product, total, logistics, rating
                     flat_disc: List = []
-                    for gid, disc, promo in disc_items[:3]:
+                    for gid, disc, promo, basic_p, product_p, total_p, logistics_p, rating_p in disc_items[:3]:
                         link = f"https://www.wildberries.ru/catalog/{gid}/detail.aspx" if gid else None
-                        flat_disc.extend([gid, link, disc, promo])
+                        flat_disc.extend([
+                            gid,
+                            link,
+                            disc,
+                            promo,
+                            basic_p,
+                            product_p,
+                            total_p,
+                            logistics_p,
+                            rating_p,
+                        ])
 
                     row = [
                         sid,
@@ -275,6 +359,17 @@ async def export_data(
                         sample.get("priceMin"),
                         sample.get("priceAvg"),
                         sample.get("priceMax"),
+                        # per-component aggregates
+                        sample.get("basicMin"),
+                        sample.get("basicAvg"),
+                        sample.get("basicMax"),
+                        sample.get("productMin"),
+                        sample.get("productAvg"),
+                        sample.get("productMax"),
+                        sample.get("totalMin"),
+                        sample.get("totalAvg"),
+                        sample.get("totalMax"),
+                        sample.get("logisticsAvg"),
                         sample.get("ratingAvgProd"),
                         sample.get("feedbacksSum"),
                         sample.get("discountAvg"),
