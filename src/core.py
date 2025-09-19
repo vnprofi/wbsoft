@@ -406,7 +406,8 @@ async def export_data(
         await asyncio.gather(*tasks, return_exceptions=True)
 
     # Save
-    df = pd.DataFrame(rows, columns=COLUMNS)
+    df = pd.DataFrame(rows)
+    df.columns = COLUMNS
     if output_path.lower().endswith(".xlsx"):
         df.to_excel(output_path, index=False)
     else:
@@ -419,3 +420,139 @@ async def export_data(
 def export_data_sync(seller_ids: List[int], output_path: str, progress_cb: Optional[Callable[[int, int], None]] = None):
     """Blocking convenience wrapper for export_data inside non-async contexts."""
     return asyncio.run(export_data(seller_ids, output_path, progress_cb))
+
+
+# Функция для получения данных в виде списка словарей (для HTML отчётов)
+async def get_sellers_data(
+    seller_ids: List[int],
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+    concurrency: int = 10,
+) -> List[dict]:
+    """Fetch data for given seller ids and return as list of dictionaries."""
+    q = asyncio.Queue()
+    for sid in seller_ids:
+        q.put_nowait(sid)
+
+    rows: List[dict] = []
+    lock = asyncio.Lock()
+
+    async def worker(session: aiohttp.ClientSession):
+        nonlocal rows
+        while True:
+            try:
+                sid = await q.get()
+                try:
+                    passport_raw = await fetch_passport(session, sid)
+                    sample_raw = await fetch_goods_sample(session, sid)
+
+                    # Use empty dicts if any of the fetches failed so that we still output the row
+                    passport = passport_raw or {}
+                    sample = sample_raw or {}
+                    
+                    # Helper to ensure lists always have exactly 3 elements
+                    def pad(lst, size=3, fill=None):
+                        return (list(lst) + [fill] * size)[:size]
+
+                    # Top subjects / brands always length 3
+                    top_subjects = pad(sample.get("topSubjects", []))
+                    top_brands = pad(sample.get("topBrands", []))
+
+                    # Discounts list – each item is 8-tuple (id, disc, promo, basic, product, total, logistics, rating)
+                    disc_items = sample.get("topDiscountItems", [])
+                    disc_items = disc_items + [(None,) * 8] * (3 - len(disc_items))
+
+                    # Build flattened list for each of 3 items: id, link, disc, promo, basic, product, total, logistics, rating
+                    flat_disc: List = []
+                    for gid, disc, promo, basic_p, product_p, total_p, logistics_p, rating_p in disc_items[:3]:
+                        link = f"https://www.wildberries.ru/catalog/{gid}/detail.aspx" if gid else None
+                        flat_disc.extend([
+                            gid,
+                            link,
+                            disc,
+                            promo,
+                            basic_p,
+                            product_p,
+                            total_p,
+                            logistics_p,
+                            rating_p,
+                        ])
+
+                    # Создаём словарь с данными
+                    row_dict = {
+                        "ID": sid,
+                        "Продавец": passport.get("supplierName"),
+                        "Полное название": passport.get("supplierFullName"),
+                        "Торговая марка": passport.get("trademark"),
+                        "Ссылка": f"https://www.wildberries.ru/seller/{sid}",
+                        "ИНН": passport.get("inn"),
+                        "КПП": passport.get("kpp"),
+                        "ОГРН": passport.get("ogrn"),
+                        "Адрес": passport.get("address"),
+                        "Категорий": sample.get("subjectsCount"),
+                        "Топ категория 1": top_subjects[0],
+                        "Топ категория 2": top_subjects[1],
+                        "Топ категория 3": top_subjects[2],
+                        "Топ бренд 1": top_brands[0],
+                        "Топ бренд 2": top_brands[1],
+                        "Топ бренд 3": top_brands[2],
+                        "Цена мин": sample.get("priceMin"),
+                        "Цена средн": sample.get("priceAvg"),
+                        "Цена макс": sample.get("priceMax"),
+                        "Цена basic мин": sample.get("basicMin"),
+                        "Цена basic средн": sample.get("basicAvg"),
+                        "Цена basic макс": sample.get("basicMax"),
+                        "Цена product мин": sample.get("productMin"),
+                        "Цена product средн": sample.get("productAvg"),
+                        "Цена product макс": sample.get("productMax"),
+                        "Цена total мин": sample.get("totalMin"),
+                        "Цена total средн": sample.get("totalAvg"),
+                        "Цена total макс": sample.get("totalMax"),
+                        "Цена logistics средн": sample.get("logisticsAvg"),
+                        "Ср. рейтинг товаров": sample.get("ratingAvgProd"),
+                        "Сумма отзывов товаров": sample.get("feedbacksSum"),
+                        "Ср. скидка %": sample.get("discountAvg"),
+                        "Макс. скидка %": sample.get("discountMax"),
+                        "Кол-во акций": sample.get("promoCount"),
+                        "Типы акций": sample.get("promoTypes"),
+                    }
+                    
+                    # Добавляем данные о товарах со скидками
+                    for i, (gid, disc, promo, basic_p, product_p, total_p, logistics_p, rating_p) in enumerate(disc_items[:3], 1):
+                        link = f"https://www.wildberries.ru/catalog/{gid}/detail.aspx" if gid else None
+                        row_dict.update({
+                            f"СкидТовар{i}": gid,
+                            f"СсылкаТовар{i}": link,
+                            f"Скид%{i}": disc,
+                            f"Акция{i}": promo,
+                            f"Цена basic {i}": basic_p,
+                            f"Цена product {i}": product_p,
+                            f"Цена total {i}": total_p,
+                            f"Цена logistics {i}": logistics_p,
+                            f"Рейтинг{i}": rating_p,
+                        })
+                    
+                    async with lock:
+                        rows.append(row_dict)
+                except Exception as exc:
+                    # log and continue processing other IDs
+                    print(f"Error processing {sid}: {exc}")
+                finally:
+                    if progress_cb:
+                        progress_cb(len(rows), len(seller_ids))
+                    q.task_done()
+            except asyncio.CancelledError:
+                break
+
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        tasks = [asyncio.create_task(worker(session)) for _ in range(concurrency)]
+        await q.join()
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    return rows
+
+
+def get_sellers_data_sync(seller_ids: List[int], progress_cb: Optional[Callable[[int, int], None]] = None) -> List[dict]:
+    """Blocking convenience wrapper for get_sellers_data inside non-async contexts."""
+    return asyncio.run(get_sellers_data(seller_ids, progress_cb))

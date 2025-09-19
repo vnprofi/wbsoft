@@ -16,17 +16,19 @@ from PyQt6.QtGui import QDesktopServices
 import sys
 import re
 import pathlib
-from typing import List
+from typing import List, Dict
 
 from qasync import QEventLoop, asyncSlot
 import asyncio
 
 try:
     # when packaged as a standalone executable core will be importable as top-level module
-    from core import export_data
+    from core import export_data, get_sellers_data_sync
+    from html_report import SimpleHTMLReportGenerator
 except ImportError:
     # fallback to relative import when running from source tree
-    from .core import export_data
+    from .core import export_data, get_sellers_data_sync
+    from .html_report import SimpleHTMLReportGenerator
 
 
 class MainWindow(QWidget):
@@ -37,6 +39,7 @@ class MainWindow(QWidget):
         self._build_ui()
 
         self.total_ids = 0
+        self.last_data = []  # Сохраняем последние обработанные данные для HTML отчёта
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -75,10 +78,14 @@ class MainWindow(QWidget):
         btn_row = QHBoxLayout()
         self.start_btn = QPushButton("Старт")
         self.start_btn.clicked.connect(self.on_start)
+        self.html_report_btn = QPushButton("📊HTML Отчёт")
+        self.html_report_btn.clicked.connect(self.on_html_report)
+        self.html_report_btn.setEnabled(False)  # Начально отключена
         suggest_btn = QPushButton("Предложить улучшение")
         suggest_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://t.me/Userspoi")))
         btn_row.addStretch(1)
         btn_row.addWidget(self.start_btn)
+        btn_row.addWidget(self.html_report_btn)
         btn_row.addWidget(suggest_btn)
         layout.addLayout(btn_row)
 
@@ -138,12 +145,59 @@ class MainWindow(QWidget):
 
         try:
             await export_data(seller_ids, output_path, progress_cb)
-            QMessageBox.information(self, "Готово", f"Файл успешно сохранён:\n{output_path}")
+            
+            # Получаем данные для HTML отчёта
+            self.last_data = await self._get_data_for_html(seller_ids)
+            
+            QMessageBox.information(self, "Готово", f"Файл успешно сохранён:\n{output_path}\n\nТеперь вы можете создать HTML отчёт для просмотра данных!")
+            
+            # Включаем кнопку HTML отчёта
+            self.html_report_btn.setEnabled(True)
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Во время обработки произошла ошибка:\n{e}")
         finally:
             self.start_btn.setEnabled(True)
             self.progress.setValue(0)
+    
+    async def _get_data_for_html(self, seller_ids: List[int]) -> List[Dict]:
+        """Получает данные для HTML отчёта."""
+        def progress_cb(done: int, total: int):
+            percent = int(done / total * 100)
+            self.progress.setValue(percent)
+        
+        try:
+            # Используем новую функцию для получения данных в виде словарей
+            from core import get_sellers_data
+            return await get_sellers_data(seller_ids, progress_cb)
+        except Exception as e:
+            print(f"Error getting data for HTML: {e}")
+            return []
+    
+    def on_html_report(self):
+        """Обработчик кнопки HTML отчёта."""
+        if not self.last_data:
+            QMessageBox.warning(self, "Нет данных", "Сначала выполните парсинг данных.")
+            return
+        
+        try:
+            # Создаём HTML отчёт
+            report_generator = SimpleHTMLReportGenerator()
+            report_generator.set_data(self.last_data)
+            
+            # Генерируем отчёт
+            report_path = report_generator.generate_report()
+            
+            # Открываем в браузере
+            report_generator.open_report_in_browser(report_path)
+            
+            QMessageBox.information(
+                self, 
+                "Отчёт создан", 
+                f"HTML отчёт создан и открыт в браузере!\n\nПуть: {report_path}\n\nВ отчёте вы можете:\n• Фильтровать данные\n• Сравнивать продавцов\n• Экспортировать в CSV/Excel/PDF"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при создании HTML отчёта:\n{e}")
 
 
 # ----------------------- Entry point -------------------------
