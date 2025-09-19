@@ -23,10 +23,10 @@ import asyncio
 
 try:
     # when packaged as a standalone executable core will be importable as top-level module
-    from core import export_data
+    from core import export_data, export_html_report
 except ImportError:
     # fallback to relative import when running from source tree
-    from .core import export_data
+    from .core import export_data, export_html_report
 
 
 class MainWindow(QWidget):
@@ -59,7 +59,7 @@ class MainWindow(QWidget):
         btn_out = QPushButton("Куда сохранить…")
         btn_out.clicked.connect(self.choose_output)
         self.format_combo = QComboBox()
-        self.format_combo.addItems(["CSV", "Excel (XLSX)"])
+        self.format_combo.addItems(["CSV", "Excel (XLSX)", "HTML отчет"])
         out_row.addWidget(QLabel("Выходной файл:"))
         out_row.addWidget(self.output_edit, 1)
         out_row.addWidget(btn_out)
@@ -89,7 +89,8 @@ class MainWindow(QWidget):
             self.input_edit.setText(path)
 
     def choose_output(self):
-        default_ext = "csv" if self.format_combo.currentIndex() == 0 else "xlsx"
+        idx = self.format_combo.currentIndex()
+        default_ext = "csv" if idx == 0 else ("xlsx" if idx == 1 else "html")
         path, _ = QFileDialog.getSaveFileName(self, "Сохранить файл", f"result.{default_ext}", "CSV (*.csv);;Excel (*.xlsx)")
         if path:
             self.output_edit.setText(path)
@@ -123,6 +124,8 @@ class MainWindow(QWidget):
             output_path += ".csv"
         if fmt_idx == 1 and not output_path.lower().endswith(".xlsx"):
             output_path += ".xlsx"
+        if fmt_idx == 2 and not output_path.lower().endswith(".html"):
+            output_path += ".html"
         seller_ids = self.parse_ids(input_path)
         if not seller_ids:
             QMessageBox.information(self, "Нет ID", "Не найдено ни одного ID продавца в выбранном файле.")
@@ -137,8 +140,14 @@ class MainWindow(QWidget):
             self.progress.setValue(percent)
 
         try:
-            await export_data(seller_ids, output_path, progress_cb)
-            QMessageBox.information(self, "Готово", f"Файл успешно сохранён:\n{output_path}")
+            if fmt_idx == 2:
+                html_path = await export_html_report(seller_ids, output_path, progress_cb)
+                QMessageBox.information(self, "Готово", f"HTML отчёт сохранён:\n{html_path}\n\nРядом лежат ссылки для CSV/Excel.")
+                # auto-open in default browser
+                QDesktopServices.openUrl(QUrl.fromLocalFile(html_path))
+            else:
+                await export_data(seller_ids, output_path, progress_cb)
+                QMessageBox.information(self, "Готово", f"Файл успешно сохранён:\n{output_path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Во время обработки произошла ошибка:\n{e}")
         finally:

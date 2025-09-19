@@ -3,6 +3,7 @@ import aiohttp
 import csv
 import json
 from typing import List, Callable, Optional
+import os
 
 # HTTP constants
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=15)
@@ -419,3 +420,378 @@ async def export_data(
 def export_data_sync(seller_ids: List[int], output_path: str, progress_cb: Optional[Callable[[int, int], None]] = None):
     """Blocking convenience wrapper for export_data inside non-async contexts."""
     return asyncio.run(export_data(seller_ids, output_path, progress_cb))
+
+
+# -------------------------------------------------------------
+# HTML report --------------------------------------------------
+def _escape_html(text: Optional[str]) -> str:
+    if text is None:
+        return ""
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def _render_html_report(df, html_path: str, download_csv: Optional[str], download_xlsx: Optional[str]):
+    # Build HTML table body
+    rows_html = []
+    for _, row in df.iterrows():
+        tds = []
+        for col in COLUMNS:
+            val = row.get(col)
+            if col.startswith("Ссылка"):
+                if isinstance(val, str) and val:
+                    tds.append(f'<td><a href="{_escape_html(val)}" target="_blank">ссылка</a></td>')
+                else:
+                    tds.append("<td></td>")
+            else:
+                tds.append(f"<td>{_escape_html(val)}</td>")
+        # add a select checkbox for compare
+        tds.insert(0, '<td><input type="checkbox" class="row-select" /></td>')
+        rows_html.append("<tr>" + "".join(tds) + "</tr>")
+
+    # Headers
+    thead_cols = ["<th></th>"] + [f"<th>{_escape_html(c)}</th>" for c in COLUMNS]
+    thead_html = "<tr>" + "".join(thead_cols) + "</tr>"
+
+    # Basic, dependency-free interactivity
+    html = f"""
+<!DOCTYPE html>
+<html lang=\"ru\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>Отчет по продавцам WB</title>
+  <style>
+    body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; }}
+    header {{ padding: 14px 18px; background: #6a11cb; background: linear-gradient(90deg,#6a11cb,#2575fc); color: #fff; }}
+    header h1 {{ margin: 0; font-size: 20px; }}
+    .container {{ padding: 16px 18px 28px; }}
+    .toolbar {{ display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }}
+    .toolbar input[type=text] {{ padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; min-width: 220px; }}
+    .toolbar .range {{ display: flex; gap: 6px; align-items: center; }}
+    .toolbar label {{ color: #333; font-size: 14px; }}
+    .toolbar a.btn {{ text-decoration: none; padding: 8px 12px; border-radius: 6px; background: #f0f2f5; color: #333; border: 1px solid #d0d7de; }}
+    .toolbar a.btn.primary {{ background: #2563eb; color: #fff; border-color: #1d4ed8; }}
+    .grid {{ overflow: auto; border: 1px solid #e5e7eb; border-radius: 8px; }}
+    table {{ border-collapse: separate; border-spacing: 0; width: 100%; }}
+    thead th {{ position: sticky; top: 0; background: #f8fafc; z-index: 1; text-align: left; padding: 10px; border-bottom: 1px solid #e5e7eb; font-weight: 600; font-size: 13px; color: #111827; }}
+    tbody td {{ padding: 10px; border-bottom: 1px solid #f1f5f9; font-size: 13px; color: #111827; white-space: nowrap; }}
+    tbody tr:hover {{ background: #f8fafc; }}
+    .panel {{ margin-top: 14px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fcfcfd; }}
+    .panel h3 {{ margin: 0 0 10px; font-size: 16px; }}
+    .muted {{ color: #6b7280; }}
+    .chips {{ display: flex; gap: 8px; flex-wrap: wrap; }}
+    .chip {{ background: #eef2ff; color: #3730a3; padding: 6px 10px; border-radius: 999px; font-size: 12px; border: 1px solid #c7d2fe; }}
+    .sortable {{ cursor: pointer; }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Отчет по продавцам WB</h1>
+  </header>
+  <div class=\"container\">
+    <div class=\"toolbar\">
+      <input id=\"globalFilter\" type=\"text\" placeholder=\"Фильтр по любому полю…\" />
+      <div class=\"range\">
+        <label>Цена мин от</label>
+        <input id=\"minPrice\" type=\"number\" step=\"0.01\" style=\"width:110px\" />
+        <label>до</label>
+        <input id=\"maxPrice\" type=\"number\" step=\"0.01\" style=\"width:110px\" />
+      </div>
+      { (f'<a class=\"btn\" href=\"{download_csv}\">Скачать CSV</a>') if download_csv else '' }
+      { (f'<a class=\"btn\" href=\"{download_xlsx}\">Скачать Excel</a>') if download_xlsx else '' }
+      <a id=\"clearSel\" class=\"btn\" href=\"#\">Снять выделение</a>
+      <a id=\"sortByPrice\" class=\"btn\" href=\"#\">Сортировать по цене средн</a>
+    </div>
+    <div class=\"grid\">
+      <table id=\"data\">\n        <thead>\n          {thead_html}\n        </thead>\n        <tbody>\n          {''.join(rows_html)}\n        </tbody>\n      </table>
+    </div>
+    <div class=\"panel\">
+      <h3>Сравнение цен выбранных продавцов</h3>
+      <div id=\"compareChips\" class=\"chips\"></div>
+      <div class=\"muted\" style=\"margin-top:8px\">Выберите строки (чекбоксы) для сравнения. Сравниваются столбцы «Цена мин», «Цена средн», «Цена макс».</div>
+      <div id=\"compareStats\" style=\"margin-top:10px\"></div>
+    </div>
+  </div>
+  <script>
+    (function() {{
+      const table = document.getElementById('data');
+      const globalFilter = document.getElementById('globalFilter');
+      const minPrice = document.getElementById('minPrice');
+      const maxPrice = document.getElementById('maxPrice');
+      const clearSel = document.getElementById('clearSel');
+      const sortByPrice = document.getElementById('sortByPrice');
+      const tbody = table.querySelector('tbody');
+      const rows = Array.from(tbody.querySelectorAll('tr'));
+
+      function textOfRow(row) {{
+        return row.innerText.toLowerCase();
+      }}
+
+      function getNum(cellText) {{
+        const v = parseFloat(cellText.replace(',', '.'));
+        return isNaN(v) ? null : v;
+      }}
+
+      function applyFilters() {{
+        const q = globalFilter.value.trim().toLowerCase();
+        const mn = parseFloat(minPrice.value.replace(',', '.'));
+        const mx = parseFloat(maxPrice.value.replace(',', '.'));
+
+        rows.forEach(row => {{
+          let ok = true;
+          if (q) ok = textOfRow(row).includes(q);
+
+          // Цена мин находится в колонке с заголовком "Цена мин"
+          if (ok && (minPrice.value || maxPrice.value)) {{
+            const cells = row.querySelectorAll('td');
+            // offset +1 из-за чекбокса в начале
+            const priceMinCell = cells[{COLUMNS.index('Цена мин') + 1}];
+            const priceMin = priceMinCell ? getNum(priceMinCell.textContent) : null;
+            if (minPrice.value && (priceMin === null || priceMin < mn)) ok = false;
+            if (maxPrice.value && (priceMin === null || priceMin > mx)) ok = false;
+          }}
+
+          row.style.display = ok ? '' : 'none';
+        }});
+      }}
+
+      globalFilter.addEventListener('input', applyFilters);
+      minPrice.addEventListener('input', applyFilters);
+      maxPrice.addEventListener('input', applyFilters);
+
+      clearSel.addEventListener('click', e => {{
+        e.preventDefault();
+        tbody.querySelectorAll('input.row-select').forEach(cb => cb.checked = false);
+        updateCompare();
+      }});
+
+      sortByPrice.addEventListener('click', e => {{
+        e.preventDefault();
+        const idx = {COLUMNS.index('Цена средн') + 1};
+        const sorted = rows.slice().sort((a,b) => {{
+          const av = getNum(a.children[idx].textContent) ?? -Infinity;
+          const bv = getNum(b.children[idx].textContent) ?? -Infinity;
+          return bv - av;
+        }});
+        sorted.forEach(r => tbody.appendChild(r));
+      }});
+
+      // Column sorting on header click
+      const ths = Array.from(table.querySelectorAll('thead th'));
+      ths.forEach((th, i) => {{
+        th.classList.add('sortable');
+        let asc = true;
+        th.addEventListener('click', () => {{
+          if (i === 0) return; // checkbox column
+          const idx = i;
+          const sorted = rows.slice().sort((a,b) => {{
+            const at = a.children[idx].textContent.trim();
+            const bt = b.children[idx].textContent.trim();
+            const an = parseFloat(at.replace(',', '.'));
+            const bn = parseFloat(bt.replace(',', '.'));
+            const aIsNum = !isNaN(an);
+            const bIsNum = !isNaN(bn);
+            let res;
+            if (aIsNum && bIsNum) res = (an - bn);
+            else res = at.localeCompare(bt, 'ru', {{ sensitivity: 'base' }});
+            return asc ? res : -res;
+          }});
+          asc = !asc;
+          sorted.forEach(r => tbody.appendChild(r));
+        }});
+      }});
+
+      // Compare panel
+      const chips = document.getElementById('compareChips');
+      const stats = document.getElementById('compareStats');
+
+      function updateCompare() {{
+        const selected = rows.filter(r => r.querySelector('input.row-select').checked);
+        chips.innerHTML = '';
+        const nameIdx = {COLUMNS.index('Продавец') + 1};
+        selected.forEach(r => {{
+          const name = r.children[nameIdx].textContent || '—';
+          const chip = document.createElement('span');
+          chip.className = 'chip';
+          chip.textContent = name;
+          chips.appendChild(chip);
+        }});
+
+        const fields = [
+          {{ key: 'Цена мин', idx: {COLUMNS.index('Цена мин') + 1} }},
+          {{ key: 'Цена средн', idx: {COLUMNS.index('Цена средн') + 1} }},
+          {{ key: 'Цена макс', idx: {COLUMNS.index('Цена макс') + 1} }},
+        ];
+
+        function numFrom(r, i) {{
+          const t = r.children[i].textContent;
+          const v = parseFloat(t.replace(',', '.'));
+          return isNaN(v) ? null : v;
+        }}
+
+        let html = '';
+        fields.forEach(f => {{
+          const values = selected.map(r => numFrom(r, f.idx)).filter(v => v !== null);
+          if (values.length === 0) return;
+          const min = Math.min.apply(null, values);
+          const max = Math.max.apply(null, values);
+          const avg = values.reduce((a,b) => a+b, 0) / values.length;
+          html += `<div><strong>${{f.key}}</strong>: мин ${{min}}, ср ${{avg.toFixed(2)}}, макс ${{max}}</div>`;
+        }});
+        stats.innerHTML = html || '<span class="muted">Ничего не выбрано.</span>';
+      }}
+
+      tbody.addEventListener('change', e => {{
+        if (e.target.classList.contains('row-select')) updateCompare();
+      }});
+
+      // initial state
+      applyFilters();
+    }})();
+  </script>
+</body>
+</html>
+"""
+
+    with open(html_path, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
+async def export_html_report(
+    seller_ids: List[int],
+    output_html_path: str,
+    progress_cb: Optional[Callable[[int, int], None]] = None,
+    concurrency: int = 10,
+):
+    """Fetch data and build an interactive HTML report. Also saves CSV and XLSX next to HTML.
+
+    Returns the path to the generated HTML file.
+    """
+    import pandas as pd
+
+    # We reuse export_data logic to collect rows, but avoid saving a non-HTML file
+    q = asyncio.Queue()
+    for sid in seller_ids:
+        q.put_nowait(sid)
+
+    rows: List[List] = []
+    lock = asyncio.Lock()
+
+    async def worker(session: aiohttp.ClientSession):
+        nonlocal rows
+        while True:
+            try:
+                sid = await q.get()
+                try:
+                    passport_raw = await fetch_passport(session, sid)
+                    sample_raw = await fetch_goods_sample(session, sid)
+
+                    passport = passport_raw or {}
+                    sample = sample_raw or {}
+
+                    def pad(lst, size=3, fill=None):
+                        return (list(lst) + [fill] * size)[:size]
+
+                    top_subjects = pad(sample.get("topSubjects", []))
+                    top_brands = pad(sample.get("topBrands", []))
+
+                    disc_items = sample.get("topDiscountItems", [])
+                    disc_items = disc_items + [(None,) * 8] * (3 - len(disc_items))
+
+                    flat_disc: List = []
+                    for gid, disc, promo, basic_p, product_p, total_p, logistics_p, rating_p in disc_items[:3]:
+                        link = f"https://www.wildberries.ru/catalog/{gid}/detail.aspx" if gid else None
+                        flat_disc.extend([
+                            gid,
+                            link,
+                            disc,
+                            promo,
+                            basic_p,
+                            product_p,
+                            total_p,
+                            logistics_p,
+                            rating_p,
+                        ])
+
+                    row = [
+                        sid,
+                        passport.get("supplierName"),
+                        passport.get("supplierFullName"),
+                        passport.get("trademark"),
+                        f"https://www.wildberries.ru/seller/{sid}",
+                        passport.get("inn"),
+                        passport.get("kpp"),
+                        passport.get("ogrn"),
+                        passport.get("address"),
+                        sample.get("subjectsCount"),
+                        *top_subjects,
+                        *top_brands,
+                        sample.get("priceMin"),
+                        sample.get("priceAvg"),
+                        sample.get("priceMax"),
+                        sample.get("basicMin"),
+                        sample.get("basicAvg"),
+                        sample.get("basicMax"),
+                        sample.get("productMin"),
+                        sample.get("productAvg"),
+                        sample.get("productMax"),
+                        sample.get("totalMin"),
+                        sample.get("totalAvg"),
+                        sample.get("totalMax"),
+                        sample.get("logisticsAvg"),
+                        sample.get("ratingAvgProd"),
+                        sample.get("feedbacksSum"),
+                        sample.get("discountAvg"),
+                        sample.get("discountMax"),
+                        sample.get("promoCount"),
+                        sample.get("promoTypes"),
+                        *flat_disc,
+                    ]
+
+                    async with lock:
+                        rows.append(row)
+                except Exception:
+                    pass
+                finally:
+                    if progress_cb:
+                        progress_cb(len(rows), len(seller_ids))
+                    q.task_done()
+            except asyncio.CancelledError:
+                break
+
+    async with aiohttp.ClientSession(timeout=HTTP_TIMEOUT) as session:
+        tasks = [asyncio.create_task(worker(session)) for _ in range(concurrency)]
+        await q.join()
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    df = pd.DataFrame(rows, columns=COLUMNS)
+
+    base, _ = os.path.splitext(output_html_path)
+    csv_path = base + ".csv"
+    xlsx_path = base + ".xlsx"
+
+    # Save CSV and XLSX so user can download from report
+    try:
+        df.to_csv(csv_path, index=False, sep=";", encoding="utf-8")
+    except Exception:
+        csv_path = None
+    try:
+        df.to_excel(xlsx_path, index=False)
+    except Exception:
+        xlsx_path = None
+
+    # Use relative links next to HTML
+    csv_link = os.path.basename(csv_path) if csv_path else None
+    xlsx_link = os.path.basename(xlsx_path) if xlsx_path else None
+    _render_html_report(df, output_html_path, csv_link, xlsx_link)
+
+    return output_html_path
